@@ -24,6 +24,7 @@ limitations under the License.
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/platform/bfloat16.h"
+#include "tensorflow/core/platform/threadpool.h"
 
 namespace tensorflow {
 
@@ -137,7 +138,7 @@ class SparseTensorDenseMatMulOp : public OpKernel {
   if (adjoint_a_ == ADJ_A && adjoint_b_ == ADJ_B) {                        \
     Status functor_status = functor::SparseTensorDenseMatMulFunctor<       \
         Device, T, Tindices, ADJ_A,                                        \
-        ADJ_B>::Compute(ctx->eigen_device<Device>(), out->matrix<T>(),     \
+        ADJ_B>::Compute(ctx, ctx->eigen_device<Device>(), out->matrix<T>(),     \
                         a_indices->matrix<Tindices>(), a_values->vec<T>(), \
                         b->matrix<T>());                                   \
     OP_REQUIRES_OK(ctx, functor_status);                                   \
@@ -183,7 +184,7 @@ namespace functor {
   template <>                                                             \
   Status SparseTensorDenseMatMulFunctor<                                  \
       GPUDevice, T, Tindices, ADJ_A,                                      \
-      ADJ_B>::Compute(const GPUDevice& d, typename TTypes<T>::Matrix out, \
+      ADJ_B>::Compute(OpKernelContext* ctx, const GPUDevice& d, typename TTypes<T>::Matrix out, \
                       TTypes<Tindices>::ConstMatrix a_indices,            \
                       typename TTypes<T>::ConstVec a_values,              \
                       typename TTypes<T>::ConstMatrix b);                 \
@@ -245,8 +246,13 @@ template <typename T, typename Tindices, bool ADJ_A, bool ADJ_B>
 struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   // Vectorize certain operations above this size.
   static constexpr std::size_t kNumVectorize = 32;
+  // Maximum number of shards into which to divide the computation for each COO
+  // Sparse Matrix instance.
+  static constexpr int32 kMaxShards = 20;
+  // Number of shards allocated to each thread.
+  static constexpr int32 kNumShardsPerThread = 3;
 
-  static Status Compute(const CPUDevice& d, typename TTypes<T>::Matrix out,
+  static Status Compute(OpKernelContext* ctx, const CPUDevice& d, typename TTypes<T>::Matrix out,
                         typename TTypes<Tindices>::ConstMatrix a_indices,
                         typename TTypes<T>::ConstVec a_values,
                         typename TTypes<T>::ConstMatrix b) {
@@ -261,8 +267,63 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     // TODO(ebrevdo): After many failed experiments, can't find a multi-threaded
     // approach that achieves the performance of the single threaded
     // one.  Perhaps Eigen threadpool implementation is just too slow?
+    //
+    //
+    if (nnz >= 8192) {
+      auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
+      auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
+      const int32 num_threads = worker_threads.num_threads;
+      // Each thread writes to its own copy of the matrix product. These
+      // `num_threads` copies are summed together to obtain the final result.
+      Tensor matmul_result_buffer;
+//       OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
+//                                              TensorShape({num_threads + 1,
+//                                                           out->dimension(0),
+//                                                           out->dimension(1)}),
+//                                              &matmul_result_buffer));
+       ctx->allocate_temp(DataTypeToEnum<T>::value,
+                                             TensorShape({num_threads + 1,
+                                                          out.dimension(0),
+                                                          out.dimension(1)}),
+                                             &matmul_result_buffer);
 
-    if (rhs_right < kNumVectorize) {
+      functor::SetZeroFunctor<CPUDevice, T> set_zero;
+      set_zero(d, matmul_result_buffer.flat<T>());
+
+      const int64 block_size =
+          nnz / std::max(kMaxShards, kNumShardsPerThread * num_threads);
+      worker_threads.workers->ParallelForWithWorkerId(
+          nnz  /* total */,
+          thread::ThreadPool::SchedulingParams(
+              thread::ThreadPool::SchedulingStrategy::
+                  kFixedBlockSize /* strategy */,
+              absl::nullopt /* cost_per_unit */, block_size),
+          [&](int64 block_begin, int64 block_end, int tid) {
+        for (std::size_t i = block_begin; i < block_end; ++i) {
+                const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
+                const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
+                if (!FastBoundsCheck(k, lhs_right)) {
+                  return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
+                }
+                if (!FastBoundsCheck(m, out.dimension(0))) {
+                  return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
+                }
+                const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
+                for (std::size_t n = 0; n < rhs_right; ++n) {
+                  const T b_value = maybe_adjoint_b(k, n);
+//                   fixme
+//                   matmul_result_buffer(tid, m, n) += a_value * b_value;
+                }
+              }
+            });
+//
+      // Sum across each thread's matmul result.
+      using Reducer = Eigen::internal::SumReducer<T>;
+      using Index = typename TTypes<T>::Tensor::Index;
+      out = matmul_result_buffer.matrix<T>().reduce(
+          Eigen::array<Index, 1>({0}), Reducer());
+
+    } else if (rhs_right < kNumVectorize) {
       // Disable vectorization if the RHS of output is too small
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
 
