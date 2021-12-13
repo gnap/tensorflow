@@ -19,11 +19,15 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/sparse_tensor_dense_matmul_op.h"
 
+#include "third_party/eigen3/Eigen/Core"
+#include "third_party/eigen3/Eigen/SparseCore"
+#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/platform/bfloat16.h"
+#include "tensorflow/core/platform/threadpool.h"
 
 namespace tensorflow {
 
@@ -137,7 +141,7 @@ class SparseTensorDenseMatMulOp : public OpKernel {
   if (adjoint_a_ == ADJ_A && adjoint_b_ == ADJ_B) {                        \
     Status functor_status = functor::SparseTensorDenseMatMulFunctor<       \
         Device, T, Tindices, ADJ_A,                                        \
-        ADJ_B>::Compute(ctx->eigen_device<Device>(), out->matrix<T>(),     \
+        ADJ_B>::Compute(ctx, ctx->eigen_device<Device>(), out->matrix<T>(),     \
                         a_indices->matrix<Tindices>(), a_values->vec<T>(), \
                         b->matrix<T>());                                   \
     OP_REQUIRES_OK(ctx, functor_status);                                   \
@@ -183,7 +187,7 @@ namespace functor {
   template <>                                                             \
   Status SparseTensorDenseMatMulFunctor<                                  \
       GPUDevice, T, Tindices, ADJ_A,                                      \
-      ADJ_B>::Compute(const GPUDevice& d, typename TTypes<T>::Matrix out, \
+      ADJ_B>::Compute(OpKernelContext* ctx, const GPUDevice& d, typename TTypes<T>::Matrix out, \
                       TTypes<Tindices>::ConstMatrix a_indices,            \
                       typename TTypes<T>::ConstVec a_values,              \
                       typename TTypes<T>::ConstMatrix b);                 \
@@ -245,8 +249,15 @@ template <typename T, typename Tindices, bool ADJ_A, bool ADJ_B>
 struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   // Vectorize certain operations above this size.
   static constexpr std::size_t kNumVectorize = 32;
+  // Maximum number of shards into which to divide the computation for each COO
+  // Sparse Matrix instance.
+  // Number of shards allocated to each thread.
+  static constexpr int32 kNumShardsPerThread = 1;
 
-  static Status Compute(const CPUDevice& d, typename TTypes<T>::Matrix out,
+  using Matrix =
+      Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+  using MatrixMap = Eigen::Map<Matrix>;
+  static Status Compute(OpKernelContext* ctx, const CPUDevice& d, typename TTypes<T>::Matrix out,
                         typename TTypes<Tindices>::ConstMatrix a_indices,
                         typename TTypes<T>::ConstVec a_values,
                         typename TTypes<T>::ConstMatrix b) {
@@ -255,6 +266,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     const std::size_t lhs_right = (ADJ_B ? b.dimension(1) : b.dimension(0));
     const int lhs_index_a = ADJ_A ? 1 : 0;
     const int rhs_index_a = ADJ_A ? 0 : 1;
+    static constexpr int32 kMinShards = 10;
 
     out.setZero();
 
@@ -285,20 +297,42 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       // Vectorization via Eigen.
       const int b_chip_index = ADJ_B ? 1 : 0;
 
-#define LOOP_NNZ(b_passed)                                                  \
-  for (std::size_t i = 0; i < nnz; ++i) {                                   \
-    const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a)); \
-    const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a)); \
-    const T a_value = (ADJ_A) ? MaybeConj(a_values(i)) : a_values(i);       \
-    if (!FastBoundsCheck(k, lhs_right)) {                                   \
-      return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);               \
-    }                                                                       \
-    if (!FastBoundsCheck(m, out.dimension(0))) {                            \
-      return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));        \
-    }                                                                       \
-    out.template chip<0>(m) +=                                              \
-        b_passed.template chip<b_chip_index>(k) * a_value;                  \
-  }
+#define LOOP_NNZ_PARALLEL(b_passed)                                                              \
+      auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());                   \
+      const int32 num_threads = worker_threads.num_threads;                                  \
+       LOG(INFO) << "lhs_index_a=" << lhs_index_a << ", rhs_index_a=" <<                         \
+           rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right="<< rhs_right;             \
+       const int64 block_size = std::max(4096, int32(out.dimension(0)) / num_threads);           \
+      auto lambda = [&](Tindices block_begin, Tindices block_end, int tid) {                     \
+        LOG(INFO) << "block_begin=" << block_begin << ", block_end=" <<                          \
+            block_end << ", tid=" << tid;                                                        \
+        for (long long int i = 0; i < nnz; ++i) {                                                \
+                 const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));         \
+               if (m < block_begin || m >= block_end ) {                                         \
+                 continue;                                                                       \
+               }                                                                                 \
+                const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));          \
+                if (!FastBoundsCheck(k, lhs_right)) {                                            \
+                    LOG(INFO) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);                \
+                    continue;                                                                    \
+                }                                                                                \
+                if (!FastBoundsCheck(m, out.dimension(0))) {                                     \
+                  LOG(INFO) << MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));           \
+                  continue;                                                                      \
+                }                                                                                \
+                const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);                  \
+                 out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;          \
+              }                                                                                  \
+        return;                                                                                  \
+            };                                                                                   \
+      worker_threads.workers->ParallelForWithWorkerId(                                           \
+          out.dimension(0)  /* total */,                                                         \
+          thread::ThreadPool::SchedulingParams(                                                  \
+              thread::ThreadPool::SchedulingStrategy::                                           \
+                  kFixedBlockSize /* strategy */,                                                \
+              absl::nullopt /* cost_per_unit */, block_size),                                    \
+          lambda                                                                                 \
+          );                                                                                     \
 
       if (ADJ_B) {
         // Perform transpose and conjugation on B once, since we chip out B's
@@ -306,9 +340,9 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
         Eigen::array<int, 2> shuffle(1, 0);  // preserve dimension order
         Eigen::Tensor<T, 2, Eigen::ColMajor> col_major_conj_b =
             b.swap_layout().shuffle(shuffle).conjugate();
-        LOOP_NNZ(col_major_conj_b);
+        LOOP_NNZ_PARALLEL(col_major_conj_b);
       } else {
-        LOOP_NNZ(b);
+        LOOP_NNZ_PARALLEL(b);
       }
 #undef LOOP_NNZ
     }

@@ -32,6 +32,7 @@ limitations under the License.
 #include "tensorflow/compiler/jit/graphcycles/graphcycles.h"
 
 #include <algorithm>
+#include <limits>
 #include <unordered_set>
 
 #include "absl/algorithm/container.h"

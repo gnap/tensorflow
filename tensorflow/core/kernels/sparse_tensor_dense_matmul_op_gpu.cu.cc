@@ -63,7 +63,7 @@ namespace functor {
 template <typename T, typename Tindices, bool ADJ_A, bool ADJ_B>
 struct SparseTensorDenseMatMulFunctor<GPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   static EIGEN_ALWAYS_INLINE Status
-  Compute(const GPUDevice& d, typename TTypes<T>::Matrix out,
+  Compute(OpKernelContext* ctx, const GPUDevice& d, typename TTypes<T>::Matrix out,
           typename TTypes<Tindices>::ConstMatrix a_indices,
           typename TTypes<T>::ConstVec a_values,
           typename TTypes<T>::ConstMatrix b) {
