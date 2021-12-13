@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_COMPILER_JIT_GRAPHCYCLES_GRAPHCYCLES_H_
 
 #include <vector>
+#include <limits>
 
 // GraphCycles detects the introduction of a cycle into a directed
 // graph that is being built up incrementally.

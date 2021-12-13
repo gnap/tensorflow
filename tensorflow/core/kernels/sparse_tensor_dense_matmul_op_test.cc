@@ -117,4 +117,5 @@ BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, false, true);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, false);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, true);
 
+BM_SparseTensorDenseMatmul(81920, 150000, 81920, 128, false, false);
 }  // end namespace tensorflow
