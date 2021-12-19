@@ -19,6 +19,9 @@ limitations under the License.
 
 #include "tensorflow/core/kernels/sparse_tensor_dense_matmul_op.h"
 
+#include "third_party/eigen3/Eigen/Core"
+#include "third_party/eigen3/Eigen/SparseCore"
+#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
 #include "tensorflow/core/framework/bounds_check.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -248,7 +251,6 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   static constexpr std::size_t kNumVectorize = 32;
   // Maximum number of shards into which to divide the computation for each COO
   // Sparse Matrix instance.
-  static constexpr int32 kMaxShards = 20;
   // Number of shards allocated to each thread.
   static constexpr int32 kNumShardsPerThread = 3;
 
@@ -261,6 +263,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     const std::size_t lhs_right = (ADJ_B ? b.dimension(1) : b.dimension(0));
     const int lhs_index_a = ADJ_A ? 1 : 0;
     const int rhs_index_a = ADJ_A ? 0 : 1;
+    static constexpr int32 kMinShards = 10;
 
     out.setZero();
 
@@ -286,42 +289,47 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
                                                           out.dimension(0),
                                                           out.dimension(1)}),
                                              &matmul_result_buffer);
-
+       int outNumElements = out.dimension(0) * out.dimension(1);
+       int outDimension1 = out.dimension(1);
       functor::SetZeroFunctor<CPUDevice, T> set_zero;
       set_zero(d, matmul_result_buffer.flat<T>());
 
       const int64 block_size =
-          nnz / std::max(kMaxShards, kNumShardsPerThread * num_threads);
+          nnz / std::max(kMinShards, kNumShardsPerThread * num_threads);
+      auto lambda = [&](long long int block_begin, long long int block_end, int tid) {
+        for (long long int i = block_begin; i < block_end; ++i) {
+                const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
+                const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
+//                 if (!FastBoundsCheck(k, lhs_right)) {
+//                   return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
+//                 }
+//                 if (!FastBoundsCheck(m, out.dimension(0))) {
+//                   return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
+//                 }
+                const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
+                for (std::size_t n = 0; n < rhs_right; ++n) {
+                  const T b_value = maybe_adjoint_b(k, n);
+// //                   fixme
+//                   matmul_result_buffer.flat<T>().data()[tid * block_size * outNumElements + m * outDimension1 + n] += a_value * b_value;
+                }
+              }
+            };
+
       worker_threads.workers->ParallelForWithWorkerId(
           nnz  /* total */,
           thread::ThreadPool::SchedulingParams(
               thread::ThreadPool::SchedulingStrategy::
                   kFixedBlockSize /* strategy */,
               absl::nullopt /* cost_per_unit */, block_size),
-          [&](int64 block_begin, int64 block_end, int tid) {
-        for (std::size_t i = block_begin; i < block_end; ++i) {
-                const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
-                const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
-                if (!FastBoundsCheck(k, lhs_right)) {
-                  return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
-                }
-                if (!FastBoundsCheck(m, out.dimension(0))) {
-                  return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
-                }
-                const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
-                for (std::size_t n = 0; n < rhs_right; ++n) {
-                  const T b_value = maybe_adjoint_b(k, n);
-//                   fixme
-//                   matmul_result_buffer(tid, m, n) += a_value * b_value;
-                }
-              }
-            });
-//
+          lambda
+          );
+
       // Sum across each thread's matmul result.
-      using Reducer = Eigen::internal::SumReducer<T>;
-      using Index = typename TTypes<T>::Tensor::Index;
-      out = matmul_result_buffer.matrix<T>().reduce(
-          Eigen::array<Index, 1>({0}), Reducer());
+//       using Reducer = Eigen::internal::SumReducer<T>;
+//       using Index = typename TTypes<T>::Tensor::Index;
+//       // dim not match???
+//       out = matmul_result_buffer.matrix<T>().reduce(
+//           Eigen::array<Index, 1>({0}), Reducer());
 
     } else if (rhs_right < kNumVectorize) {
       // Disable vectorization if the RHS of output is too small
