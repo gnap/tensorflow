@@ -308,12 +308,12 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
                 const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
                 const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
                 if (!FastBoundsCheck(k, lhs_right)) {
-                  continue
-//                   return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
+                    LOG(INFO) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
+                    continue
                 }
                 if (!FastBoundsCheck(m, out.dimension(0))) {
+                  LOG(INFO) << MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
                   continue
-//                   return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
                 }
 
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
