@@ -254,6 +254,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   // Number of shards allocated to each thread.
   static constexpr int32 kNumShardsPerThread = 3;
 
+  using MatrixMap = Eigen::Map<Matrix>;
   static Status Compute(OpKernelContext* ctx, const CPUDevice& d, typename TTypes<T>::Matrix out,
                         typename TTypes<Tindices>::ConstMatrix a_indices,
                         typename TTypes<T>::ConstVec a_values,
@@ -288,8 +289,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
 //                                              &matmul_result_buffer));
        ctx->allocate_temp(DataTypeToEnum<T>::value,
                                              TensorShape({num_threads + 1,
-                                                          out.dimension(0),
-                                                          out.dimension(1)}),
+                                                          out.NumElements()}),
                                              &matmul_result_buffer);
        int outNumElements = out.dimension(0) * out.dimension(1);
        int outDimension1 = out.dimension(1);
@@ -318,6 +318,12 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
 
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
                 out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
+                MatrixMap output_map(
+                    matmul_result_buffer.flat<T>().data() +
+                    tid * block_size * outNumElements,
+                    out.dimension(0), out.dimension(1));
+                outmap.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
+
 //                 for (std::size_t n = 0; n < rhs_right; ++n) {
 //                   const T b_value = maybe_adjoint_b(k, n);
 // // //                   fixme
@@ -336,11 +342,11 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
           );
 
       // Sum across each thread's matmul result.
-//       using Reducer = Eigen::internal::SumReducer<T>;
-//       using Index = typename TTypes<T>::Tensor::Index;
+      using Reducer = Eigen::internal::SumReducer<T>;
+      using Index = typename TTypes<T>::Tensor::Index;
 //       // dim not match???
-//       out = matmul_result_buffer.matrix<T>().reduce(
-//           Eigen::array<Index, 1>({0}), Reducer());
+      out = matmul_result_buffer.matrix<T>().reduce(
+          Eigen::array<Index, 1>({0}), Reducer());
 
     } else if (rhs_right < kNumVectorize) {
       // Disable vectorization if the RHS of output is too small
