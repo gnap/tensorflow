@@ -273,7 +273,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     //
     //
 //     if (nnz >= 8192) {
-    if (false) {
+    if (8192) {
       const int b_chip_index = ADJ_B ? 1 : 0;
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
       auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
@@ -296,24 +296,28 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       functor::SetZeroFunctor<CPUDevice, T> set_zero;
       set_zero(d, matmul_result_buffer.flat<T>());
 
+        LOG(INFO) << "lhs_index_a=" << lhs_index_a << "rhs_index_a=" << rhs_index_a << "lhs_right=" << lhs_right << "rhs_right"<< rhs_right;
 //       const int64 block_size =
 //           nnz / std::max(kMinShards, kNumShardsPerThread * num_threads);
       const int64 block_size =
           nnz / num_threads;
       auto lambda = [&](long long int block_begin, long long int block_end, int tid) {
+        LOG(INFO) << "block_begin=" << block_begin << "block_end=" << block_end << "tid=" << tid;
+        // [<lhs_index_a>m, <rhs_index_a>k] @ [<lhs_right>k, <rhs_right>n] = [m, n]
         for (long long int i = block_begin; i < block_end; ++i) {
                 const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
                 const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
-//                 if (!FastBoundsCheck(k, lhs_right)) {
+                if (!FastBoundsCheck(k, lhs_right)) {
+                  continue
 //                   return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
-//                 }
-//                 if (!FastBoundsCheck(m, out.dimension(0))) {
+                }
+                if (!FastBoundsCheck(m, out.dimension(0))) {
+                  continue
 //                   return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
-//                 }
-//
+                }
+
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
-//     out.template chip<0>(m) +=                                              \
-//         b.template chip<b_chip_index>(k) * a_value;                  \
+                out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
 //                 for (std::size_t n = 0; n < rhs_right; ++n) {
 //                   const T b_value = maybe_adjoint_b(k, n);
 // // //                   fixme
