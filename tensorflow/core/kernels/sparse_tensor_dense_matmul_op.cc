@@ -272,7 +272,9 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     // one.  Perhaps Eigen threadpool implementation is just too slow?
     //
     //
-    if (nnz >= 8192) {
+//     if (nnz >= 8192) {
+    if (false) {
+      const int b_chip_index = ADJ_B ? 1 : 0;
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
       auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
       const int32 num_threads = worker_threads.num_threads;
@@ -294,8 +296,10 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       functor::SetZeroFunctor<CPUDevice, T> set_zero;
       set_zero(d, matmul_result_buffer.flat<T>());
 
+//       const int64 block_size =
+//           nnz / std::max(kMinShards, kNumShardsPerThread * num_threads);
       const int64 block_size =
-          nnz / std::max(kMinShards, kNumShardsPerThread * num_threads);
+          nnz / num_threads;
       auto lambda = [&](long long int block_begin, long long int block_end, int tid) {
         for (long long int i = block_begin; i < block_end; ++i) {
                 const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
@@ -306,12 +310,15 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
 //                 if (!FastBoundsCheck(m, out.dimension(0))) {
 //                   return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
 //                 }
+//
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
-                for (std::size_t n = 0; n < rhs_right; ++n) {
-                  const T b_value = maybe_adjoint_b(k, n);
-// //                   fixme
-//                   matmul_result_buffer.flat<T>().data()[tid * block_size * outNumElements + m * outDimension1 + n] += a_value * b_value;
-                }
+//     out.template chip<0>(m) +=                                              \
+//         b.template chip<b_chip_index>(k) * a_value;                  \
+//                 for (std::size_t n = 0; n < rhs_right; ++n) {
+//                   const T b_value = maybe_adjoint_b(k, n);
+// // //                   fixme
+// //                   matmul_result_buffer.flat<T>().data()[tid * block_size * outNumElements + m * outDimension1 + n] += a_value * b_value;
+//                 }
               }
             };
 
