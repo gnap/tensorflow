@@ -275,7 +275,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     // one.  Perhaps Eigen threadpool implementation is just too slow?
     //
     //
-    if (nnz >= 16384) {
+    if (nnz > 16384) {
 //     if (false) {
       const int b_chip_index = ADJ_B ? 1 : 0;
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
@@ -301,7 +301,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
         LOG(INFO) << "lhs_index_a=" << lhs_index_a << ", rhs_index_a=" << rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right="<< rhs_right;
 //       const int64 block_size =
 //           nnz / std::max(kMinShards, kNumShardsPerThread * num_threads);
-      const int64 block_size = 8192;
+      const int64 block_size = 16384;
 //           nnz / num_threads;
       auto lambda = [&](Tindices block_begin, Tindices block_end, int tid) {
         LOG(INFO) << "block_begin=" << block_begin << ", block_end=" << block_end << ", tid=" << tid;

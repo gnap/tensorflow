@@ -83,9 +83,10 @@ static Graph* SparseTensorDenseMatmul(int nnz, int m, int k, int n,
       BM_SparseTensorDenseMatmul##_##NNZ##_##M##_##K##_##N##_##TA##_##TB##_##DEVICE);
 
 #define BM_SparseTensorDenseMatmul(NNZ, M, K, N, TA, TB)    \
-  BM_SparseTensorDenseMatmulDev(NNZ, M, K, N, TA, TB, cpu); \
-  BM_SparseTensorDenseMatmulDev(NNZ, M, K, N, TA, TB, gpu);
+  BM_SparseTensorDenseMatmulDev(NNZ, M, K, N, TA, TB, cpu); 
 
+//   BM_SparseTensorDenseMatmulDev(NNZ, M, K, N, TA, TB, cpu); \
+//   BM_SparseTensorDenseMatmulDev(NNZ, M, K, N, TA, TB, gpu);
 /*
 BM_SparseTensorDenseMatmul(128, 8, 512, 1, false, false);
 BM_SparseTensorDenseMatmul(128, 16, 512, 1, false, false);
@@ -119,9 +120,9 @@ BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, false);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, true);
 */
 
-BM_SparseTensorDenseMatmul(10240,  10240, 150000, 128, false, false);
-BM_SparseTensorDenseMatmul(20480, 20480, 150000, 128, false, false);
-BM_SparseTensorDenseMatmul(40960, 40960, 150000, 128, false, false);
-BM_SparseTensorDenseMatmul(81920, 81920, 150000, 128, false, false);
-BM_SparseTensorDenseMatmul(163840, 163840, 150000, 128, false, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(20480, 20480, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(40960, 40960, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(81920, 81920, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(163840, 163840, 150000, 64, false, false);
 }  // end namespace tensorflow
