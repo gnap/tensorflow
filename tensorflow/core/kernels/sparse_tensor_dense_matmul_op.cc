@@ -353,8 +353,15 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       using Reducer = Eigen::internal::SumReducer<T>;
       using Index = typename TTypes<T>::Tensor::Index;
 //       // dim not match???
-//       out = matmul_result_buffer.matrix<T>().reduce(
-//           Eigen::array<Index, 1>({0}), Reducer());
+      out = matmul_result_buffer.tensor<T, 2>().reshape(
+          Eigen::array<Index, 2>({
+          num_threads+1,
+          out.dimension(0)*out.dimension(1)})).reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
+            out.dimension(0),
+            out.dimension(1)}));
+//       out = matmul_result_buffer.matrix<T>().reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
+//            out.dimension(0),
+//            out.dimension(1)}));
 
     } else if (rhs_right < kNumVectorize) {
       // Disable vectorization if the RHS of output is too small
