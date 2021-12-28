@@ -4706,6 +4706,7 @@ tf_kernel_library(
     prefix = "sparse_tensor_dense_matmul_op",
     deps = SPARSE_DEPS + [
         ":fill_functor",
+        ":scatter_nd_op",
         "//third_party/eigen3",
         "//tensorflow/core/framework:bounds_check",
     ],
@@ -4781,6 +4782,8 @@ tf_cuda_cc_tests(
         ":ops_util",
         ":sparse",
         ":xent_op",
+        ":scatter_functor",
+        ":scatter_nd_op",
         "//tensorflow/core:core_cpu",
         "//tensorflow/core:core_cpu_internal",
         "//tensorflow/core:framework",
