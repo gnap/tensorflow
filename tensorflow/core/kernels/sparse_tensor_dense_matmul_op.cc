@@ -26,7 +26,6 @@ limitations under the License.
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/kernels/fill_functor.h"
-#include "tensorflow/core/kernels/scatter_nd_op.h"
 #include "tensorflow/core/platform/bfloat16.h"
 #include "tensorflow/core/platform/threadpool.h"
 
@@ -285,7 +284,6 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       // Each thread writes to its own copy of the matrix product. These
       // `num_threads` copies are summed together to obtain the final result.
       Tensor matmul_result_buffer;
-      Tensor indices, updates, o;
 //       OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
 //                                              TensorShape({num_threads + 1,
 //                                                           out->dimension(0),
@@ -295,27 +293,10 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
                                              TensorShape({(num_threads + 1)*out.dimension(0),
                                                           out.dimension(1)}),
                                              &matmul_result_buffer);
-ctx->allocate_temp(DataTypeToEnum<Tindices>::value,
-                          TensorShape({nnz,
-                                      2}),
-                          &indices);
-ctx->allocate_temp(DataTypeToEnum<T>::value,
-                          TensorShape({nnz}),
-                          &updates);
-
-       ctx->allocate_temp(DataTypeToEnum<T>::value,
-                          TensorShape({out.dimension(0),
-                                      out.dimension(1)}),
-                          &o);
-
        int outNumElements = out.dimension(0) * out.dimension(1);
        int outDimension1 = out.dimension(1);
        functor::SetZeroFunctor<CPUDevice, T> set_zero;
-       functor::SetZeroFunctor<CPUDevice, int64> set_zero_idx;
        set_zero(d, matmul_result_buffer.flat<T>());
-       set_zero(d, updates.flat<T>());
-       set_zero(d, o.flat<T>());
-       set_zero_idx(d, indices.flat<int64>());
 
        LOG(INFO) << "lhs_index_a=" << lhs_index_a << ", rhs_index_a=" << rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right="<< rhs_right;
        const int64 block_size = std::max(int64(64), int64(nnz /(kNumShardsPerThread * num_threads)));
@@ -349,20 +330,15 @@ ctx->allocate_temp(DataTypeToEnum<T>::value,
 //                     m * out.dimension(1),
 //                     out.dimension(1), 1);
 
-//                 matmul_result_buffer.matrix<T>().template chip<0>(tid*out.dimension(0)+m) += b.template chip<b_chip_index>(k) * a_value;
+                matmul_result_buffer.matrix<T>().template chip<0>(tid*out.dimension(0)+m) += b.template chip<b_chip_index>(k) * a_value;
 //                 output_map.noalias() += (b.template chip<b_chip_index>(k) * a_value).matrix<T>();
                  out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
 
-                for (std::size_t n = 0; n < rhs_right; ++n) {
-                  const T b_value = maybe_adjoint_b(k, n);
-                  if (b_value != 0) {
-                    updates.tensor<T, 1>()(i) = a_value * b_value;
-                    indices.matrix<Tindices>()(i, 0) = m;
-                    indices.matrix<Tindices>()(i, 1) = n;
-                  }
+//                 for (std::size_t n = 0; n < rhs_right; ++n) {
+//                   const T b_value = maybe_adjoint_b(k, n);
 // // //                   fixme
 // //                   matmul_result_buffer.flat<T>().data()[tid * block_size * outNumElements + m * outDimension1 + n] += a_value * b_value;
-                }
+//                 }
               }
         return;
             };
@@ -380,14 +356,12 @@ ctx->allocate_temp(DataTypeToEnum<T>::value,
       using Reducer = Eigen::internal::SumReducer<T>;
       using Index = typename TTypes<T>::Tensor::Index;
 //       // dim not match???
-      functor::DoScatterNd<CPUDevice, T, int64, scatter_nd_op::UpdateOp::ADD>(
-          ctx, indices, updates, o.shape(), &o, false /*allocate*/);
-//       out = matmul_result_buffer.tensor<T, 2>().reshape(
-//           Eigen::array<Index, 2>({
-//           num_threads+1,
-//           out.dimension(0)*out.dimension(1)})).reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
-//             out.dimension(0),
-//             out.dimension(1)}));
+      out = matmul_result_buffer.tensor<T, 2>().reshape(
+          Eigen::array<Index, 2>({
+          num_threads+1,
+          out.dimension(0)*out.dimension(1)})).reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
+            out.dimension(0),
+            out.dimension(1)}));
 //       out = matmul_result_buffer.matrix<T>().reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
 //            out.dimension(0),
 //            out.dimension(1)}));
