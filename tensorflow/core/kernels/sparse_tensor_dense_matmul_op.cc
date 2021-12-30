@@ -326,9 +326,12 @@ ctx->allocate_temp(DataTypeToEnum<T>::value,
         // [<lhs_index_a>m, <rhs_index_a>k] @ [<lhs_right>k, <rhs_right>n] = [m, n]
 //         auto output_tensor = matmul_result_buffer.tensor<T, 3>().template chip<0>(tid);
 
-        
-        for (long long int i = block_begin; i < block_end; ++i) {
-                const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
+        for (long long int i = 0; i < nnz; ++i) {
+                 const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
++               // partation with m of output dim, costing redundent iteration of values.
+               if (m % num_threads + 1 != tid) {
+                       continue;
+               }
                 const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
                 if (!FastBoundsCheck(k, lhs_right)) {
                     LOG(INFO) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
@@ -348,7 +351,7 @@ ctx->allocate_temp(DataTypeToEnum<T>::value,
 
 //                 matmul_result_buffer.matrix<T>().template chip<0>(tid*out.dimension(0)+m) += b.template chip<b_chip_index>(k) * a_value;
 //                 output_map.noalias() += (b.template chip<b_chip_index>(k) * a_value).matrix<T>();
-//                 out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
+                 out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
 
                 for (std::size_t n = 0; n < rhs_right; ++n) {
                   const T b_value = maybe_adjoint_b(k, n);
