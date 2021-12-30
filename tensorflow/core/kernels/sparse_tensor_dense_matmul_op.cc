@@ -280,38 +280,20 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       const int b_chip_index = ADJ_B ? 1 : 0;
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
       auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());
-      const int32 num_threads = worker_threads.num_threads;
-      // Each thread writes to its own copy of the matrix product. These
-      // `num_threads` copies are summed together to obtain the final result.
-      Tensor matmul_result_buffer;
-//       OP_REQUIRES_OK(ctx, ctx->allocate_temp(DataTypeToEnum<T>::value,
-//                                              TensorShape({num_threads + 1,
-//                                                           out->dimension(0),
-//                                                           out->dimension(1)}),
-//                                              &matmul_result_buffer));
-       ctx->allocate_temp(DataTypeToEnum<T>::value,
-                                             TensorShape({(num_threads + 1)*out.dimension(0),
-                                                          out.dimension(1)}),
-                                             &matmul_result_buffer);
-       int outNumElements = out.dimension(0) * out.dimension(1);
-       int outDimension1 = out.dimension(1);
-       functor::SetZeroFunctor<CPUDevice, T> set_zero;
-       set_zero(d, matmul_result_buffer.flat<T>());
+      const int32 num_threads = worker_threads.num_threads / 2;
 
        LOG(INFO) << "lhs_index_a=" << lhs_index_a << ", rhs_index_a=" << rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right="<< rhs_right;
-       const int64 block_size = std::max(int64(64), int64(nnz /(kNumShardsPerThread * num_threads)));
-//       const int64 block_size = 16384;
-//           nnz / num_threads;
+//        const int64 block_size = std::max(int64(64), int64(nnz /(kNumShardsPerThread * num_threads)));
+       const int64 block_size = std::max(4096, int32(out.dimension(0)) / num_threads);
+//        const int64 block_size = out.dimension(0);
       auto lambda = [&](Tindices block_begin, Tindices block_end, int tid) {
         LOG(INFO) << "block_begin=" << block_begin << ", block_end=" << block_end << ", tid=" << tid;
-        // [<lhs_index_a>m, <rhs_index_a>k] @ [<lhs_right>k, <rhs_right>n] = [m, n]
-//         auto output_tensor = matmul_result_buffer.tensor<T, 3>().template chip<0>(tid);
 
         for (long long int i = 0; i < nnz; ++i) {
                  const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
-+               // partation with m of output dim, costing redundent iteration of values.
-               if (m % num_threads + 1 != tid) {
-                       continue;
+               // partation with m of output dim, costing redundent iteration of values.
+               if (m < block_begin || m >= block_end ) {
+                 continue;
                }
                 const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
                 if (!FastBoundsCheck(k, lhs_right)) {
@@ -324,47 +306,19 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
                 }
 
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
-//                 MatrixMap output_map(
-//                     matmul_result_buffer.flat<T>().data() +
-//                     tid * block_size * outNumElements +
-//                     m * out.dimension(1),
-//                     out.dimension(1), 1);
-
-                matmul_result_buffer.matrix<T>().template chip<0>(tid*out.dimension(0)+m) += b.template chip<b_chip_index>(k) * a_value;
-//                 output_map.noalias() += (b.template chip<b_chip_index>(k) * a_value).matrix<T>();
                  out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;
-
-//                 for (std::size_t n = 0; n < rhs_right; ++n) {
-//                   const T b_value = maybe_adjoint_b(k, n);
-// // //                   fixme
-// //                   matmul_result_buffer.flat<T>().data()[tid * block_size * outNumElements + m * outDimension1 + n] += a_value * b_value;
-//                 }
               }
         return;
             };
 
       worker_threads.workers->ParallelForWithWorkerId(
-          nnz  /* total */,
+          out.dimension(0)  /* total */,
           thread::ThreadPool::SchedulingParams(
               thread::ThreadPool::SchedulingStrategy::
                   kFixedBlockSize /* strategy */,
               absl::nullopt /* cost_per_unit */, block_size),
           lambda
           );
-
-      // Sum across each thread's matmul result.
-      using Reducer = Eigen::internal::SumReducer<T>;
-      using Index = typename TTypes<T>::Tensor::Index;
-//       // dim not match???
-      out = matmul_result_buffer.tensor<T, 2>().reshape(
-          Eigen::array<Index, 2>({
-          num_threads+1,
-          out.dimension(0)*out.dimension(1)})).reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
-            out.dimension(0),
-            out.dimension(1)}));
-//       out = matmul_result_buffer.matrix<T>().reduce(Eigen::array<Index, 1>({0}), Reducer()).reshape(Eigen::array<Index, 2>({
-//            out.dimension(0),
-//            out.dimension(1)}));
 
     } else if (rhs_right < kNumVectorize) {
       // Disable vectorization if the RHS of output is too small
