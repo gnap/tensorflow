@@ -249,11 +249,6 @@ template <typename T, typename Tindices, bool ADJ_A, bool ADJ_B>
 struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
   // Vectorize certain operations above this size.
   static constexpr std::size_t kNumVectorize = 32;
-  // Maximum number of shards into which to divide the computation for each COO
-  // Sparse Matrix instance.
-  // Number of shards allocated to each thread.
-  static constexpr int32 kNumShardsPerThread = 1;
-
   using Matrix =
       Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
   using MatrixMap = Eigen::Map<Matrix>;
