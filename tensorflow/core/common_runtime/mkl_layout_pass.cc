@@ -513,7 +513,7 @@ class MklLayoutRewritePass : public GraphOptimizationPass {
                       CopyAttrsAll, LrnGradRewrite, GetRewriteCause()});
     rinfo_.push_back({csinfo_.matmul,
                       mkl_op_registry::GetMklOpName(csinfo_.matmul),
-                      CopyAttrsAll, MatMulRewrite, kRewriteForOpNameChange});
+                      CopyAttrsAll, MatMulRewrite, kRewriteForOpNameChange}); 
     rinfo_.push_back({csinfo_.leakyrelu,
                       mkl_op_registry::GetMklOpName(csinfo_.leakyrelu),
                       CopyAttrsAll, LeakyReluRewrite, GetRewriteCause()});

@@ -118,23 +118,43 @@ BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, false, false);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, false, true);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, false);
 BM_SparseTensorDenseMatmul(16384, 4096, 4096, 4096, true, true);
-*/
 
 BM_SparseTensorDenseMatmul(10240,  10240, 150000, 16, false, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 150000, 16, true, false);
 BM_SparseTensorDenseMatmul(20480, 20480, 150000, 16, false, false);
 BM_SparseTensorDenseMatmul(40960, 40960, 150000, 16, false, false);
 BM_SparseTensorDenseMatmul(81920, 81920, 150000, 16, false, false);
 BM_SparseTensorDenseMatmul(163840, 163840, 150000, 16, false, false);
 
 BM_SparseTensorDenseMatmul(10240,  10240, 150000, 32, false, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 150000, 32, true, false);
 BM_SparseTensorDenseMatmul(20480, 20480, 150000, 32, false, false);
 BM_SparseTensorDenseMatmul(40960, 40960, 150000, 32, false, false);
 BM_SparseTensorDenseMatmul(81920, 81920, 150000, 32, false, false);
 BM_SparseTensorDenseMatmul(163840, 163840, 150000, 32, false, false);
 
 BM_SparseTensorDenseMatmul(10240,  10240, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 150000, 64, true, false);
 BM_SparseTensorDenseMatmul(20480, 20480, 150000, 64, false, false);
 BM_SparseTensorDenseMatmul(40960, 40960, 150000, 64, false, false);
 BM_SparseTensorDenseMatmul(81920, 81920, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(81920, 81920, 150000, 64, true, false);
 BM_SparseTensorDenseMatmul(163840, 163840, 150000, 64, false, false);
+BM_SparseTensorDenseMatmul(163840, 163840, 150000, 64, true, false);
+
+BM_SparseTensorDenseMatmul(10240,  10240, 1250000, 16, false, false);
+BM_SparseTensorDenseMatmul(10240,  1250000, 10240, 16, true, false);
+BM_SparseTensorDenseMatmul(10240,  10240,  1250000, 32, false, false);
+BM_SparseTensorDenseMatmul(10240,  1250000, 10240, 32, true, false);
+BM_SparseTensorDenseMatmul(10240,  10240,  1250000, 64, false, false);
+BM_SparseTensorDenseMatmul(10240,  1250000, 10240, 64, true, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 1250000, 96, false, false);
+BM_SparseTensorDenseMatmul(10240,  1250000, 10240, 96, true, false);
+*/
+
+BM_SparseTensorDenseMatmul(10240,  10240, 1250000, 192, false, false);
+BM_SparseTensorDenseMatmul(10240,  10240, 1250000, 192, true, false);
+BM_SparseTensorDenseMatmul(10240,  500000, 1024, 192, false, false);
+BM_SparseTensorDenseMatmul(10240,  500000, 1024, 192, true, false);
+
 }  // end namespace tensorflow

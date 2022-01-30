@@ -128,12 +128,12 @@ class SparseTensorDenseMatMulOp : public OpKernel {
       return;
     }
 
+      functor::SetZeroFunctor<Device, T> f;
+      f(ctx->eigen_device<Device>(), out->flat<T>());
     if (a_values->NumElements() == 0 || b->NumElements() == 0) {
       // If a has shape [x, 0] and b has shape [0, y], the
       // output shape is [x, y] where x and y are non-zero, so we fill
       // the output with zeros.
-      functor::SetZeroFunctor<Device, T> f;
-      f(ctx->eigen_device<Device>(), out->flat<T>());
       return;
     }
 
@@ -263,7 +263,15 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
     const int rhs_index_a = ADJ_A ? 0 : 1;
     static constexpr int32 kMinShards = 10;
 
-    out.setZero();
+    // out.setZero();
+
+    auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());                   
+    const int32 num_threads = worker_threads.num_threads;                                      
+    const int32 total_size = out.dimension(0);                                                 
+     VLOG(3) << "nnz=" << nnz << ", lhs_index_a=" << lhs_index_a << ", rhs_index_a=" <<                           
+         rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right=" <<
+         rhs_right << ", total_size=" << total_size;             
+    const int64 block_size = std::max(4096, int32(total_size) / num_threads);                 
 
     // TODO(ebrevdo): After many failed experiments, can't find a multi-threaded
     // approach that achieves the performance of the single threaded
@@ -273,33 +281,48 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       // Disable vectorization if the RHS of output is too small
       auto maybe_adjoint_b = MaybeAdjoint<decltype(b), ADJ_B>(b);
 
-      for (std::size_t i = 0; i < nnz; ++i) {
-        const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
-        const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
-        if (!FastBoundsCheck(k, lhs_right)) {
-          return KOutOfBoundsError(k, i, rhs_index_a, lhs_right);
+      auto lambda = [&](Tindices block_begin, Tindices block_end, int tid) {                     
+        VLOG(3) << "block_begin=" << block_begin << ", block_end=" <<                            
+            block_end << ", tid=" << tid;                                                        
+
+        for (std::size_t i = 0; i < nnz; ++i) {
+          const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));
+          const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));
+          if (m < block_begin || m >= block_end ) {                                         
+                 continue;                                                                       
+               }                                                                                 
+                if (!FastBoundsCheck(k, lhs_right)) {                                            
+                    LOG(ERROR) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);               
+                    continue;                                                                    
+                }                                                                                
+                if (!FastBoundsCheck(m, out.dimension(0))) {                                     
+                  LOG(ERROR) << MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));          
+                  continue;                                                                      
+                }
+          const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
+          for (std::size_t n = 0; n < rhs_right; ++n) {
+            const T b_value = maybe_adjoint_b(k, n);
+            out(m, n) += a_value * b_value;
+          }
         }
-        if (!FastBoundsCheck(m, out.dimension(0))) {
-          return MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));
-        }
-        const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);
-        for (std::size_t n = 0; n < rhs_right; ++n) {
-          const T b_value = maybe_adjoint_b(k, n);
-          out(m, n) += a_value * b_value;
-        }
-      }
+        return;                                                                                  
+            };                                                                                   
+      worker_threads.workers->ParallelForWithWorkerId(                                           
+          total_size  /* total */,                                                               
+          thread::ThreadPool::SchedulingParams(                                                  
+              thread::ThreadPool::SchedulingStrategy::                                           
+                  kFixedBlockSize /* strategy */,                                                
+              absl::nullopt /* cost_per_unit */, block_size),                                    
+          lambda                                                                                 
+          );                                                                                     
+
     } else {
       // Vectorization via Eigen.
       const int b_chip_index = ADJ_B ? 1 : 0;
 
 #define LOOP_NNZ_PARALLEL(b_passed)                                                              \
-      auto worker_threads = *(ctx->device()->tensorflow_cpu_worker_threads());                   \
-      const int32 num_threads = worker_threads.num_threads;                                  \
-       LOG(INFO) << "lhs_index_a=" << lhs_index_a << ", rhs_index_a=" <<                         \
-           rhs_index_a << ", lhs_right=" << lhs_right << ", rhs_right="<< rhs_right;             \
-       const int64 block_size = std::max(4096, int32(out.dimension(0)) / num_threads);           \
       auto lambda = [&](Tindices block_begin, Tindices block_end, int tid) {                     \
-        LOG(INFO) << "block_begin=" << block_begin << ", block_end=" <<                          \
+        VLOG(3) << "block_begin=" << block_begin << ", block_end=" <<                            \
             block_end << ", tid=" << tid;                                                        \
         for (long long int i = 0; i < nnz; ++i) {                                                \
                  const Tindices m = internal::SubtleMustCopy(a_indices(i, lhs_index_a));         \
@@ -308,20 +331,20 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
                }                                                                                 \
                 const Tindices k = internal::SubtleMustCopy(a_indices(i, rhs_index_a));          \
                 if (!FastBoundsCheck(k, lhs_right)) {                                            \
-                    LOG(INFO) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);                \
+                    LOG(ERROR) << KOutOfBoundsError(k, i, rhs_index_a, lhs_right);               \
                     continue;                                                                    \
                 }                                                                                \
                 if (!FastBoundsCheck(m, out.dimension(0))) {                                     \
-                  LOG(INFO) << MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));           \
+                  LOG(ERROR) << MOutOfBoundsError(m, i, lhs_index_a, out.dimension(0));          \
                   continue;                                                                      \
                 }                                                                                \
                 const T a_value = ADJ_A ? MaybeConj(a_values(i)) : a_values(i);                  \
-                 out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;          \
+                out.template chip<0>(m) += b.template chip<b_chip_index>(k) * a_value;           \
               }                                                                                  \
         return;                                                                                  \
             };                                                                                   \
       worker_threads.workers->ParallelForWithWorkerId(                                           \
-          out.dimension(0)  /* total */,                                                         \
+          total_size  /* total */,                                                               \
           thread::ThreadPool::SchedulingParams(                                                  \
               thread::ThreadPool::SchedulingStrategy::                                           \
                   kFixedBlockSize /* strategy */,                                                \
@@ -339,7 +362,7 @@ struct SparseTensorDenseMatMulFunctor<CPUDevice, T, Tindices, ADJ_A, ADJ_B> {
       } else {
         LOOP_NNZ_PARALLEL(b);
       }
-#undef LOOP_NNZ
+#undef LOOP_NNZ_PARALLEL
     }
     return Status::OK();
   }
