@@ -38,7 +38,7 @@ Status EnsureSparseVariableAccess(OpKernelContext* ctx, Var* var) {
   // also happen if there are no concurrent reads of the variable and
   // copy-on-read mode is false.
   if (var->tensor()->RefCountIsOne()) {
-    var->copy_on_read_mode.store(true);
+    // var->copy_on_read_mode.store(true);
     return Status::OK();
   }
   Tensor tmp;
@@ -64,7 +64,7 @@ Status EnsureSparseVariableAccess(OpKernelContext* ctx, Var* var) {
                  const_cast<const Tensor*>(var->tensor())->flat<T>());
   }
   *var->tensor() = tmp;
-  var->copy_on_read_mode.store(true);
+  // var->copy_on_read_mode.store(true);
   return Status::OK();
 }
 
